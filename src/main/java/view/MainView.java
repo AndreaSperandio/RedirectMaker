@@ -13,6 +13,7 @@ import java.io.IOException;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -28,6 +29,8 @@ import javax.swing.filechooser.FileNameExtensionFilter;
 
 import control.ExportCore;
 import control.ImportCore;
+import control.JsonExportCore;
+import model.ExportRow;
 import model.ImportedRow;
 import model.QueryParam;
 import view.component.RMButton;
@@ -47,6 +50,8 @@ public class MainView extends JFrame {
 	private static final String DESKTOP_FOLDER = System.getProperty("user.home") + File.separator + "Desktop";
 	private static final String IMPORT_FILE_EXTENSION = ".xlsx";
 	private static final String EXPORT_FILE_EXTENSION = ".json";
+	private static final String REDIRECTED_EXPORT_FILE = MainView.DESKTOP_FOLDER + File.separator
+			+ "RedirectedUrls.xlsx";
 	private static final String NON_REDIRECTED_EXPORT_FILE = MainView.DESKTOP_FOLDER + File.separator
 			+ "nonRedirectedUrls.txt";
 
@@ -59,6 +64,7 @@ public class MainView extends JFrame {
 	private final RMButton btnConfigSM = new RMButton(MainView.LOC.getRes("btnConfigSM"));
 	private final RMButton btnCreateRedirects = new RMButton(RMResource.getStartImage());
 	private final JLabel lblCreateRedirects = new JLabel(MainView.LOC.getRes("lblCreateRedirects"));
+	private final RMButton btnExportExcel = new RMButton(MainView.LOC.getRes("btnExportExcel"));
 	private final JLabel lblGroupName = new JLabel(MainView.LOC.getRes("lblGroupName"));
 	private final RMTextField txtGroupName = new RMTextField();
 	private final JLabel lblQueryParams = new JLabel(MainView.LOC.getRes("lblQueryParams"));
@@ -116,6 +122,7 @@ public class MainView extends JFrame {
 		this.add(this.btnConfigSM);
 		this.add(this.btnCreateRedirects);
 		this.add(this.lblCreateRedirects);
+		this.add(this.btnExportExcel);
 		this.add(this.lblGroupName);
 		this.add(this.txtGroupName);
 		this.add(this.lblQueryParams);
@@ -148,7 +155,8 @@ public class MainView extends JFrame {
 		this.btnConfigSM.setBounds(x + 270, y, 120, height);
 		y += 40;
 		this.btnCreateRedirects.setBounds(x, y, 35, height + 10);
-		this.lblCreateRedirects.setBounds(x + 45, y, 200, height + 10);
+		this.lblCreateRedirects.setBounds(x + 45, y, 100, height + 10);
+		this.btnExportExcel.setBounds(x + 200, y + 5, 100, height);
 		y += 70;
 		this.lblGroupName.setBounds(x, y, 100, height);
 		this.txtGroupName.setBounds(x + 140, y, 280, height);
@@ -205,6 +213,7 @@ public class MainView extends JFrame {
 			this.btnCreateRedirectsActionPerformed();
 			this.updateGraphics();
 		});
+		this.btnExportExcel.addActionListener(e -> this.btnExportExcelActionPerformed());
 		this.btnExportPath.addActionListener(e -> {
 			this.btnFileChooserActionPerformed(this.btnExport, MainView.LOC.getRes("jfcExport"), this.lblExportFile,
 					"JSON Document", "json", MainView.EXPORT_FILE_EXTENSION);
@@ -233,6 +242,7 @@ public class MainView extends JFrame {
 		this.chkSiteMigration.setEnabled(this.importFile != null);
 		this.btnConfigSM.setEnabled(this.importFile != null && this.chkSiteMigration.isSelected());
 		this.btnCreateRedirects.setEnabled(this.importFile != null);
+		this.btnExportExcel.setEnabled(this.chkSiteMigration.isSelected() && this.redirects != null);
 		this.txtGroupName.setEnabled(this.redirects != null && !this.redirects.isEmpty());
 		this.cmbQueryParams.setEnabled(this.redirects != null && !this.redirects.isEmpty());
 		this.chkRegex.setEnabled(this.redirects != null && !this.redirects.isEmpty());
@@ -299,14 +309,63 @@ public class MainView extends JFrame {
 		this.updateGraphics();
 	}
 
+	private void btnExportExcelActionPerformed() {
+		this.setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
+
+		final Set<String> vecchiUrl = new HashSet<>();
+		final Set<String> nuoviUrl = new HashSet<>();
+		final Set<String> matchUrl;
+		final List<ExportRow> exportRows = new ArrayList<>();
+
+		this.populateSM(nuoviUrl, vecchiUrl);
+		matchUrl = this.getSameSM(nuoviUrl, vecchiUrl);
+
+		final boolean colorRedirects = RMMessage.showConfirmDialog(this,
+				MainView.LOC.getRes("cnfExportRedirectedColor"));
+		final Set<String> vecchiUrlRedirects = this.redirects.keySet();
+		final Collection<String> nuoviUrlRedirects = this.redirects.values();
+
+		this.importedRows.forEach(r -> {
+			final ExportRow exportRow = new ExportRow();
+			final String urlPartenza = r.getStringAt(0);
+			final String urlArrivo = r.getStringAt(1);
+
+			final boolean isVecchioRedirectToColor = colorRedirects && urlPartenza != null
+					&& vecchiUrlRedirects.contains(urlPartenza.toLowerCase());
+			final boolean isNuovoRedirectToColor = colorRedirects && urlArrivo != null
+					&& nuoviUrlRedirects.contains(urlArrivo.toLowerCase());
+
+			exportRow.addCell(exportRow.new ExportCell(urlPartenza,
+					matchUrl.contains(urlPartenza) || isVecchioRedirectToColor, isVecchioRedirectToColor));
+			exportRow.addCell(exportRow.new ExportCell(urlArrivo,
+					matchUrl.contains(urlArrivo) || isNuovoRedirectToColor, isNuovoRedirectToColor));
+
+			exportRows.add(exportRow);
+		});
+
+		if (ExportCore.doExport(this, MainView.REDIRECTED_EXPORT_FILE, "Redirects", exportRows)) {
+			if (RMMessage.showConfirmDialog(this,
+					MainView.LOC.getRes("cnfExportedRedirected", MainView.REDIRECTED_EXPORT_FILE))) {
+				try {
+					Desktop.getDesktop().open(new File(MainView.REDIRECTED_EXPORT_FILE));
+				} catch (final IOException e) {
+					RMMessage.showErrDialog(this, MainView.LOC.getRes("errInternalError"));
+					e.printStackTrace();
+				}
+			}
+		}
+
+		this.setCursor(Cursor.getDefaultCursor());
+	}
+
 	private void btnExportActionPerformed() {
 		if (!this.checkExportParams()) {
 			return;
 		}
 
-		if (ExportCore.doExport(this, this.exportFile.getAbsolutePath(), this.redirects, this.txtGroupName.getText(),
-				this.cmbQueryParams.getSelectedItemKey(), this.chkRegex.isSelected(), this.chkIgnoreSlash.isSelected(),
-				this.chkIgnoreCase.isSelected())) {
+		if (JsonExportCore.doExport(this, this.exportFile.getAbsolutePath(), this.redirects,
+				this.txtGroupName.getText(), this.cmbQueryParams.getSelectedItemKey(), this.chkRegex.isSelected(),
+				this.chkIgnoreSlash.isSelected(), this.chkIgnoreCase.isSelected())) {
 			if (RMMessage.showConfirmDialog(this, MainView.LOC.getRes("cnfExported"))) {
 				try {
 					Desktop.getDesktop().open(this.exportFile);
@@ -439,6 +498,13 @@ public class MainView extends JFrame {
 		vecchiUrl.removeAll(tempUrl);
 	}
 
+	@SuppressWarnings("static-method")
+	private Set<String> getSameSM(final Set<String> nuoviUrl, final Set<String> vecchiUrl) {
+		final Set<String> tempUrl = new HashSet<>(nuoviUrl);
+		tempUrl.retainAll(vecchiUrl);
+		return tempUrl;
+	}
+
 	private void generateRedirectsSM(final Set<String> nuoviUrl, final Set<String> vecchiUrl,
 			final Map<String, String> stringReplacements) {
 		final Map<String, List<String>> vecchiUrlMap = new HashMap<>();
@@ -480,10 +546,10 @@ public class MainView extends JFrame {
 				}
 			}
 		} catch (final FileNotFoundException e) {
-			RMMessage.showErrDialog(this, ExportCore.LOC.getRes("errFileNotFoundException"));
+			RMMessage.showErrDialog(this, JsonExportCore.LOC.getRes("errFileNotFoundException"));
 			e.printStackTrace();
 		} catch (final IOException e) {
-			RMMessage.showErrDialog(this, ExportCore.LOC.getRes("errIOException"));
+			RMMessage.showErrDialog(this, JsonExportCore.LOC.getRes("errIOException"));
 			e.printStackTrace();
 		}
 	}
