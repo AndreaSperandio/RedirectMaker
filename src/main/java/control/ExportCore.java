@@ -3,82 +3,55 @@ package control;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.OutputStreamWriter;
-import java.io.Writer;
-import java.nio.charset.StandardCharsets;
-import java.util.Map;
-import java.util.Random;
+import java.util.List;
 
-import org.json.simple.JSONArray;
-import org.json.simple.JSONObject;
+import org.apache.poi.ss.usermodel.BorderStyle;
+import org.apache.poi.ss.usermodel.Cell;
+import org.apache.poi.ss.usermodel.CellStyle;
+import org.apache.poi.ss.usermodel.FillPatternType;
+import org.apache.poi.ss.usermodel.IndexedColors;
+import org.apache.poi.ss.usermodel.Row;
+import org.apache.poi.ss.usermodel.Sheet;
+import org.apache.poi.ss.usermodel.Workbook;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
-import model.QueryParam;
+import model.ExportRow;
 import view.MainView;
 import view.util.RMLocalizator;
 import view.util.RMMessage;
 
 public class ExportCore {
-	public static final RMLocalizator LOC = new RMLocalizator(ExportCore.class);
+	private static final RMLocalizator LOC = new RMLocalizator(ExportCore.class);
 
-	@SuppressWarnings("unchecked")
-	public static boolean doExport(final MainView parent, final String path, final Map<String, String> redirects,
-			final String groupName, final QueryParam queryParam, final boolean isRegex, final boolean ignoreSlash,
-			final boolean ignoreCase) {
+	public static boolean doExport(final MainView parent, final String path, final String sheetName,
+			final List<ExportRow> exportRows) {
 
-		if (parent == null || redirects == null || redirects.isEmpty()) {
+		if (parent == null || sheetName == null || exportRows == null) {
 			return false;
 		}
 
-		RMMessage.showInfoDialog(parent, ExportCore.LOC.getRes("infExportStarted"));
-		final int groupId = new Random().nextInt(1000) + 100;
+		try {
+			RMMessage.showInfoDialog(parent, ExportCore.LOC.getRes("infExportStarted"));
 
-		final JSONObject output = new JSONObject();
+			try (final Workbook workbook = new XSSFWorkbook();
+					final FileOutputStream fileOut = new FileOutputStream(path)) {
+				final Sheet sheet = workbook.createSheet(sheetName);
 
-		final JSONArray groups = new JSONArray();
-		final JSONObject group = new JSONObject();
-		group.put("id", groupId);
-		group.put("name", groupName);
-		group.put("module_id", 1);
-		group.put("moduleName", "WordPress");
-		group.put("enabled", true);
-		groups.add(group);
-		output.put("groups", groups);
+				sheet.setMargin(Sheet.LeftMargin, 0.6);
+				sheet.setMargin(Sheet.RightMargin, 0.6);
+				sheet.setMargin(Sheet.TopMargin, 1);
+				sheet.setMargin(Sheet.BottomMargin, 1);
+				sheet.setMargin(Sheet.HeaderMargin, 0.5);
+				sheet.setMargin(Sheet.FooterMargin, 0.5);
 
-		final JSONArray redirs = new JSONArray();
-		redirects.forEach((vecchioUrl, nuovoUrl) -> {
-			final JSONObject redirect = new JSONObject();
-			redirect.put("url", vecchioUrl);
-			redirect.put("match_url", isRegex ? "regex" : vecchioUrl);
+				ExportCore.createBody(workbook, sheet, exportRows);
 
-			final JSONObject source = new JSONObject();
-			source.put("flag_query", (isRegex ? QueryParam.EXACT : queryParam).toString().toLowerCase());
-			source.put("flag_case", ignoreCase);
-			source.put("flag_trailing", ignoreSlash);
-			source.put("flag_regex", isRegex);
-			final JSONObject matchData = new JSONObject();
-			matchData.put("source", source);
-			redirect.put("match_data", matchData);
+				for (int i = 0; i < exportRows.get(0).getCells().size(); i++) {
+					sheet.autoSizeColumn(i);
+				}
 
-			redirect.put("action_code", 301);
-			redirect.put("action_type", "url");
-
-			final JSONObject actionData = new JSONObject();
-			actionData.put("url", nuovoUrl);
-			redirect.put("action_data", actionData);
-
-			redirect.put("match_type", "url");
-			redirect.put("title", "");
-			redirect.put("regex", isRegex);
-			redirect.put("group_id", groupId);
-			redirect.put("enabled", true);
-
-			redirs.add(redirect);
-		});
-
-		output.put("redirects", redirs);
-
-		try (final Writer file = new OutputStreamWriter(new FileOutputStream(path), StandardCharsets.UTF_8)) {
-			file.write(output.toJSONString());
+				workbook.write(fileOut);
+			}
 		} catch (final FileNotFoundException e) {
 			RMMessage.showErrDialog(parent, ExportCore.LOC.getRes("errFileNotFoundException"));
 			e.printStackTrace();
@@ -92,4 +65,60 @@ public class ExportCore {
 		return true;
 	}
 
+	private static void createBody(final Workbook workbook, final Sheet sheet, final List<ExportRow> exportRows) {
+		final CellStyle bodyCellStyle = workbook.createCellStyle();
+		ExportCore.addCellBorder(bodyCellStyle);
+		final CellStyle matchedBodyCellStyle = workbook.createCellStyle();
+		ExportCore.addCellBorder(matchedBodyCellStyle);
+		ExportCore.colorCell(matchedBodyCellStyle, false);
+		ExportCore.addCellBorder(bodyCellStyle);
+		final CellStyle redirectBodyCellStyle = workbook.createCellStyle();
+		ExportCore.addCellBorder(redirectBodyCellStyle);
+		ExportCore.colorCell(redirectBodyCellStyle, true);
+
+		Row row;
+		ExportRow exportRow;
+		for (int i = 0; i < exportRows.size(); i++) {
+			row = sheet.createRow(i);
+			exportRow = exportRows.get(i);
+			if (exportRow == null) {
+				continue;
+			}
+			ExportCore.fillBodyRow(row, exportRow, bodyCellStyle, matchedBodyCellStyle, redirectBodyCellStyle);
+		}
+	}
+
+	private static void fillBodyRow(final Row row, final ExportRow exportRow, final CellStyle bodyCellStyle,
+			final CellStyle matchedBodyCellStyle, final CellStyle redirectBodyCellStyle) {
+		ExportRow.ExportCell exportCell;
+		Cell cell;
+		String value;
+		for (int i = 0; i < exportRow.getCells().size(); i++) {
+			exportCell = exportRow.getCellAt(i);
+			cell = ExportCore.createCell(row, i,
+					exportCell.isToColor() ? exportCell.isRedirect() ? redirectBodyCellStyle : matchedBodyCellStyle
+							: bodyCellStyle);
+			value = exportCell.getValue();
+			cell.setCellValue(value != null ? value : "");
+		}
+	}
+
+	private static void addCellBorder(final CellStyle cellStyle) {
+		cellStyle.setBorderTop(BorderStyle.THIN);
+		cellStyle.setBorderRight(BorderStyle.THIN);
+		cellStyle.setBorderBottom(BorderStyle.THIN);
+		cellStyle.setBorderLeft(BorderStyle.THIN);
+	}
+
+	private static void colorCell(final CellStyle cellStyle, final boolean isRedirect) {
+		cellStyle
+				.setFillForegroundColor((isRedirect ? IndexedColors.LIGHT_ORANGE : IndexedColors.PALE_BLUE).getIndex());
+		cellStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+	}
+
+	private static Cell createCell(final Row row, final int pos, final CellStyle cellStyle) {
+		final Cell cell = row.createCell(pos);
+		cell.setCellStyle(cellStyle);
+		return cell;
+	}
 }
